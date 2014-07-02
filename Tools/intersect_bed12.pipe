@@ -1,0 +1,21 @@
+#!/bin/bash
+
+function intersect_bed12
+{
+	SP_set RANDOM_NUM=$(echo "$RANDOM")
+	SP_set INPUT_HEADER=$(echo ${INPUT_BLAT_FILE} | awk -F "/" '{print $(NF)}').${RANDOM_NUM}
+	SP_set OUTPUT_HEADER=$(echo ${OUTPUT_FILE} | awk -F "/" '{print $(NF)}').${RANDOM_NUM}
+	
+	cut -f 4 ${INPUT_BLAT_FILE} | sort -u > ${TEMP_DIR}/${INPUT_HEADER}.id
+	split -n l/${THREAD_NUM} --numeric-suffixes=1 ${TEMP_DIR}/${INPUT_HEADER}.id ${TEMP_DIR}/${INPUT_HEADER}.id.
+	
+	SP_for_parallel _num={01..${THREAD_NUM}}
+	{
+		my.grep -q ${TEMP_DIR}/${INPUT_HEADER}.id.${_num} -f ${INPUT_BLAT_FILE} -c 4 > ${TEMP_DIR}/${INPUT_HEADER}.blat.${_num}
+		my.grep -q ${TEMP_DIR}/${INPUT_HEADER}.id.${_num} -f ${INPUT_BWA_FILE} -c 4 > ${TEMP_DIR}/${INPUT_HEADER}.bwa.${_num}
+		intersectBed -a ${TEMP_DIR}/${INPUT_HEADER}.blat.${_num} -b ${TEMP_DIR}/${INPUT_HEADER}.bwa.${_num} -split -s -f 0.9 -r -wa -wb | awk '$4==$16' | cut -f 1-12 > ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}
+	}
+	
+	cat ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}} > ${OUTPUT_FILE}
+	rm -f ${TEMP_DIR}/${INPUT_HEADER}.id ${TEMP_DIR}/${INPUT_HEADER}.id.{01..${THREAD_NUM}} ${TEMP_DIR}/${INPUT_HEADER}.blat.{01..${THREAD_NUM}} ${TEMP_DIR}/${INPUT_HEADER}.bwa.{01..${THREAD_NUM}} ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}
+}

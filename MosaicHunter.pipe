@@ -1,0 +1,238 @@
+#!/bin/bash
+
+function preparation
+{
+	# compile c, c++, java scripts
+	javac ${TOOLS_DIR}/PileupFilter.java
+	gcc -lm -Wall -o ${TOOLS_DIR}/Yyx_genotype_log10lik_with_precalc_beta ${TOOLS_DIR}/Yyx_genotype_log10lik_with_precalc_beta.c
+	gcc -lm -Wall -o ${TOOLS_DIR}/Yyx_real_log10lik_from_baseQ ${TOOLS_DIR}/Yyx_real_log10lik_from_baseQ.c
+	gcc -lm -Wall -o ${TOOLS_DIR}/Yyx_individual_genotyper ${TOOLS_DIR}/Yyx_individual_genotyper.c
+	gcc -lm -Wall -O2 -o ${TOOLS_DIR}/LoFreq_call ${TOOLS_DIR}/LoFreq_call.c
+	g++ -std=c++0x -Wall -Werror -lz -o ${TOOLS_DIR}/count_homopolymer ${TOOLS_DIR}/count_homopolymer.cpp
+
+	# generate regions near homopolymers
+	{{
+		count_homopolymer ${REFERENCE_DIR}/human_g1k_v37.fasta | awk '$3~/[ACGT]/&&$4>=4&&$4<=5' | awk '{OFS="\t";print $1,$2-1,$2+$4-1,$3,$4}' > ${REFERENCE_DIR}/human_g1k_v37.4-5mer.bed
+		count_homopolymer ${REFERENCE_DIR}/human_g1k_v37.fasta | awk '$3~/[ACGT]/&&$4>=6' | awk '{OFS="\t";print $1,$2-1,$2+$4-1,$3,$4}' > ${REFERENCE_DIR}/human_g1k_v37.6-mer.bed
+	}}
+	cat <(slopBed -i ${REFERENCE_DIR}/human_g1k_v37.4-5mer.bed -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 2) <(slopBed -i ${REFERENCE_DIR}/human_g1k_v37.6-mer.bed -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 3) > ${REFERENCE_DIR}/human_g1k_v37.nearhomopolymer.bed
+	
+	# generate reference human genome with contigs from both v37 and hg19
+	cat <(fasta_formatter -t -i ${REFERENCE_DIR}/human_g1k_v37.fasta) <(fasta_formatter -t -i ${REFERENCE_DIR}/human_hg19.fasta | awk '$1~"_"') | awk -F "\t" '{print ">"$1;print $2}' > ${REFERENCE_DIR}/human_v37_contig_hg19.fasta
+
+	# generate pre-calculation table for beta function
+	Rscript ${TOOLS_DIR}/generate_beta_log10_val_file.r 10000 ${REFERENCE_DIR}/beta_log10_val.10000.txt
+}
+
+function pre_genotyper_filter
+{
+	SP_set INDEL_CNV_BED=""
+	
+	# filter candidates that locate in identified CNVs or near identified indels
+	samtools mpileup -f ${REFERENCE_DIR}/human_g1k_v37.fasta -s -B -Q 0 -q 0 -d 500 ${INPUT_BAM} | java -classpath ${TOOLS_DIR} PileupFilter --minbasequal=20 --minmapqual=20 --asciibase=33 --filtered=1 | gzip > ${COMBINED_HEADER}/${PROJECT_NAME}.filtered.pileup.gz
+	SP_if ${INDEL_CNV_BED}
+	{
+		intersectBed -v -a <(zcat ${COMBINED_HEADER}/${PROJECT_NAME}.filtered.pileup.gz | awk '{OFS="\t"; print $1,$2-1,$0}' | cut -f1-2,4-) -b ${PROJECT_NAME}.indel_CNV.bed | cut -f1,3- | gzip > ${COMBINED_HEADER}/${PROJECT_NAME}.masked.pileup.gz
+	}
+	SP_else
+	{
+		cp -f ${COMBINED_HEADER}/${PROJECT_NAME}.filtered.pileup.gz ${COMBINED_HEADER}/${PROJECT_NAME}.masked.pileup.gz
+	}
+}
+
+function genotyper
+{
+	SP_set MIN_ALT_DEPTH=3
+	SP_set MIN_ALT_FREQ=0.05
+	SP_set MOSAIC_TRANSITION_MATRIX=""
+	
+	# call mosaic candidates based on our genotyper
+	mkdir -p ${COMBINED_HEADER}/Bayesian_call
+	zcat ${COMBINED_HEADER}/${PROJECT_NAME}.masked.pileup.gz | awk -v depth=${MIN_ALT_DEPTH} '$8+$9>=depth&&$10+$11>=depth' | gzip > ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.read_num_filtered.tsv.gz
+	zcat ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.read_num_filtered.tsv.gz | awk -v freq=${MIN_ALT_FREQ} '($8+$9)/$4>=freq&&($10+$11)/$4>=freq' | gzip > ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.all_filtered.tsv.gz
+	seqpipe -m ${TOOLS_DIR}/genotyper.pipe genotyper PILEUP=${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.all_filtered.tsv.gz OUTPUT_HEADER=${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output GENDER=${GENDER} MOSAIC_TRANSITION_MATRIX=${MOSAIC_TRANSITION_MATRIX} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	
+	paste ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.pileup ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.raw ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.SNP_AF | awk '{split($1,array,":"); if($2=="|"){ref=0}else{ref=length($2)} if($3=="|"){alt=0}else{alt=length($3)} if(array[4]=="."){AF=-2}if(array[4]=="A"){AF=$13}if(array[4]=="C"){AF=$14}if(array[4]=="G"){AF=$15}if(array[4]=="T"){AF=$16} printf "%s\t%d\t%d\t%s\t%s\t%d\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%s\t%s\n",array[1],array[2],ref+alt,array[3],array[4],ref,alt,-$7,-$8,-$9,-$10,$6,AF}' > ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.tsv
+	awk '$11<1.3' ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.tsv | awk '{OFS="\t"; print $1,$2-1,$2,"mosaic"}' > ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.candidate.bed
+	
+	intersectBed -wa -u -a <(zcat ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.all_filtered.tsv.gz | awk '{OFS="\t"; print $1,$2-1,$0}' | cut -f1-2,4-) -b ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.candidate.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S0_filtered.pileup
+	rm -f ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.tmp ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.tmp1 ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.tmp2
+}
+
+function post_genotyper_filter_repeat
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidates that locate in repeat region
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b <(slopBed -i <(awk '$1!="MT"' ${REFERENCE_DIR}/all_repeats.b37.bed | cut -f1-3) -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 5) | cut -f1,3- | awk '$1!="hs37d5"&&$1!="NC_007605"' | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_homopolymer
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidates that locate near homopolymers
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b ${REFERENCE_DIR}/human_g1k_v37.nearhomopolymer.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_LoFreq
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	SP_set FDR_NUM=$(wc -l ${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup)
+	
+	# filter candidates explained by sequencing error
+	mkdir -p ${COMBINED_HEADER}/LoFreq_call
+	cat ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | java -classpath ${TOOLS_DIR} PileupFilter --minbasequal=20 --minmapqual=20 --asciibase=33 --filtered=1 > ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp
+	awk '{OFS="\t"; print $16.$17.$18.$19,$8+$9+$10+$11,$10+$11}' ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp | sed -e 's/|//g' | LoFreq_call -n 1 -q 33 > ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp1
+	paste ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp1 | awk '{OFS="\t"; print $1,$2,$4,$3,$12,$8+$9,$10+$11,$22,$23,$24,$25,$16.$17.$18.$19}' | sed -e 's/|//g' | sed -e 's/inf/5000/g' > ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tsv
+	awk -v bonf=${FDR_NUM} '$8-(log(bonf)/log(10))*10>=13' ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tsv > ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.filtered.tsv
+	intersectBed -wa -u -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b <(cat ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.filtered.tsv | awk '{OFS="\t"; print $1,$2-1,$2}') | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+	rm -f ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp ${COMBINED_HEADER}/LoFreq_call/${PROJECT_NAME}.LoFreq_call.tmp1
+}
+
+function post_genotyper_filter_extreme_depth
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidates with sequencing depth <25 or >150
+	cat ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | awk '$4>=25&&$4<=150' | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_mid_support
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidates by the number of blat-checked, mid-support reads
+	mkdir -p ${COMBINED_HEADER}/mid-support
+	mkdir -p ${COMBINED_HEADER}/mid-support/blat-check
+	intersectBed -abam ${INPUT_BAM} -b <(cat ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | awk '{OFS="\t"; print $1,$2-1,$2}') > ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.candidate.bam
+	samtools view -h ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.candidate.bam | perl -ne 'print if (/^@/||(/NM:i:(\d+)/&&$1<=2))' | samtools view -Sb - > ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.bam
+	samtools view ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.bam | sam2fa.pl - > ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.fa
+	seqpipe -m ${TOOLS_DIR}/blat_best.pipe -t ${THREAD_NUM} blat_best THREAD_NUM=${THREAD_NUM} REF=${REFERENCE_DIR}/human_v37_contig_hg19.fasta INPUT_FILE=${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.fa OUTPUT_FILE=${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.psl BLAT_PAR="-stepSize=5 -repMatch=2253 -minScore=0 -minIdentity=0.5 -noHead" TEMP_DIR=${TEMP_DIR}
+	cat ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.psl.single | cut -f 9,10,14,16,17,18,19,21 | sed s'/,/\t/g' | awk '{printf $3"\t"$4"\t"$5"\t"$2"\t0\t"$1"\t"$4"\t"$5"\t255,0,0\t"$6"\t"; for(i=1;i<=(NF-6)/2;i++) printf $(6+i)","; printf "\t"; for(i=1;i<=(NF-6)/2;i++) printf $(6+(NF-6)/2+i)-$4","; printf "\n"}' > ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.blat.bed12 
+	bamToBed -bed12 -split -i ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.bam > ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.bwa.bed12
+	seqpipe -m ${TOOLS_DIR}/intersect_bed12.pipe -t ${THREAD_NUM} intersect_bed12 THREAD_NUM=${THREAD_NUM} INPUT_BLAT_FILE=${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.blat.bed12 INPUT_BWA_FILE=${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.bwa.bed12 OUTPUT_FILE=${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.pass.bed12 TEMP_DIR=${TEMP_DIR}
+	cat <(samtools view -H ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.candidate.bam) <(samtools view ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.candidate.bam | my.grep -q <(cat ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.pass.bed12 | cut -f4 | cut -f1 -d "/") -f /dev/stdin -c 1) | samtools view -Sb - > ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.blat-check.bam
+	rm -f ${COMBINED_HEADER}/mid-support/blat-check/${PROJECT_NAME}.psl.multi
+		
+	samtools view -h ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.blat-check.bam | trimBamByBlock.pl --trim_end=15 --trim_intron=5 --trim_indel=5 | samtools view -Sb - > ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.trimmed.bam
+	samtools index ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.trimmed.bam
+	samtools mpileup -f ${REFERENCE_DIR}/human_g1k_v37.fasta -s -B -Q 0 -q 0 -d 500 ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.trimmed.bam | java -classpath ${TOOLS_DIR} PileupFilter --minbasequal=20 --minmapqual=20 --asciibase=33 | gzip > ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.filtered.pileup.gz
+	myjoin -m -F 1,2,12 -f 1,2,12 <(zcat ${COMBINED_HEADER}/mid-support/${PROJECT_NAME}.filtered.pileup.gz) ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | awk '$8+$9>=($29+$30)/2&&$10+$11>=($31+$32)/2' | cut -f22- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_strand_bias
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidate list by strand bias
+	mkdir -p ${COMBINED_HEADER}/strand_bias
+	cat ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | awk '{OFS="\t"; print $1,$2-1,$2,$3,$12,$8,$9,$10,$11}' > ${COMBINED_HEADER}/strand_bias/${PROJECT_NAME}.raw.tsv
+	Rscript ${TOOLS_DIR}/strand_bias.R ${COMBINED_HEADER}/strand_bias/${PROJECT_NAME}.raw.tsv ${COMBINED_HEADER}/strand_bias/${PROJECT_NAME}.sb.tsv
+	myjoin -m -F 1,2,12 -f 1,3,5 ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup <(cat ${COMBINED_HEADER}/strand_bias/${PROJECT_NAME}.sb.tsv | awk '$10<13') | cut -f1-21 | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_read_position
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidates with different within-read position between ref and alt (mosaic-sites only)
+	mkdir -p ${COMBINED_HEADER}/linked_SNP
+	myjoin -m -F 1,2 -f 1,3 ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.candidate.bed | cut -f1-21 > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.mosaic.pileup
+	myjoin -m -F 1,2 -f 1,3 ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.mosaic.pileup <(mergeBed -i <(sortBed -i <(cat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.mosaic.pileup | awk '{OFS="\t"; print $1,$2-1,$2}')) -d 1000 -n | awk '$4==1') | awk '{OFS="\t"; print $1,$2-1,$2,$3,$12}' > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bed
+	intersectBed -abam ${INPUT_BAM} -b ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bed > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bam
+	my_join.pl -m -F 4 -f 1 -a <(intersectBed -a <(bamToBed -i ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bam -bed12) -b ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bed -wa -wb) -b <(samtools view ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bam | perl -e 'while(<>){@tab=split /\s+/;if($tab[1]&0x40){print $tab[0]."/1\t".$_}elsif($tab[1]&0x80){print $tab[0]."/2\t".$_}}') | cut -f4,13-17,22,24,28 | splitSamByAllele.pl ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.ref.id ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.alt.id ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.pos
+	myjoin -m -F 1 -f 1 <(awk '$2=="ref"' ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.pos) <(awk '$2=="alt"' ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.pos) | cut -f1,3,6 | sed -e 's/_/\t/g' > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.pos_array
+	Rscript ${TOOLS_DIR}/allele_pos_dist.R ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.pos_array ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.diff_pos.bed 13
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.diff_pos.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+	rm -f ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.pos
+}
+
+function post_genotyper_filter_linked_SNP
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	#filter candidates with linked variants (mosaic-sites only)
+	SP_for_parallel _type=ref alt
+	{
+		my_join.pl -m -F 1 -f 1 -a <(samtools view ${INPUT_BAM}) -b <(cat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.id | cut -d "/" -f1) -o "~" | cut -d "~" -f1 > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.sam
+		cat <(samtools view -H ${INPUT_BAM}) ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.sam | samtools view -Sb - > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.bam
+		samtools mpileup -f ${REFERENCE_DIR}/human_g1k_v37.fasta -s -B -Q 0 -q 0 -d 500 ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.bam | java -classpath ${TOOLS_DIR} PileupFilter --minbasequal=20 --minmapqual=20 --asciibase=33 | gzip > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.filtered.pileup.gz
+		rm -f ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.${_type}.sam
+	}
+	my_join.pl -m -F 1,2 -f 1,2 -a <(zcat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.ref.filtered.pileup.gz | awk '{OFS="\t"; print $1,$2,$3,$12,$8+$9,$10+$11}') -b <(zcat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.alt.filtered.pileup.gz | awk '{OFS="\t"; print $1,$2,$3,$12,$8+$9,$10+$11}') | awk '{if($4==$10||$4=="."||$10=="."){OFS="\t"; alt=$4; if($10!="."){alt=$10}print $1,$2-1,$2,$3,alt,$5,$6,$11,$12}}' > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.merged.tsv
+	Rscript ${TOOLS_DIR}/strand_bias.R ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.merged.tsv ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.linked.tsv
+	cat <(mergeBed -i <(sortBed -i <(cat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.mosaic.pileup | awk '{OFS="\t"; print $1,$2-1,$2}')) -d 1000 -n | awk '$4>1') <(slopBed -i <(subtractBed -a <(cat ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.linked.tsv | awk '$10>=20&&($7+$8<=1||$6+$9<=1)') -b ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.raw.bed) -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 1000) | cut -f1-3 > ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.linked.bed
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b ${COMBINED_HEADER}/linked_SNP/${PROJECT_NAME}.linked.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_clustered_singular
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# filter candidate with clustered singular sites
+	mkdir -p ${COMBINED_HEADER}/clustered_sites
+	zcat ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.Bayesian.all_filtered.tsv.gz | awk '(($10+$11)/$4<0.35&&($10+$11)/$4>0.1)||(($10+$11)/$4>0.65&&($10+$11)/$4<0.9)' > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.tsv
+	intersectBed -wa -u -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.tsv | cut -f1-2,4-) -b <(slopBed -i <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 10000) | cut -f1,3- | uniq > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.tsv
+
+		# filter singular sites by the number of blat-checked, mid-support reads
+		mkdir -p ${COMBINED_HEADER}/clustered_sites/singular_mid-support
+		mkdir -p ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check
+		intersectBed -abam ${INPUT_BAM} -b <(cat ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.tsv | awk '{OFS="\t"; print $1,$2-1,$2}') > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.candidate.bam
+		samtools view -h ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.candidate.bam | perl -ne 'print if (/^@/||(/NM:i:(\d+)/&&$1<=2))' | samtools view -Sb - > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.bam
+		samtools view ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.bam | sam2fa.pl - > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.fa
+		seqpipe -m ${TOOLS_DIR}/blat_best.pipe -t ${THREAD_NUM} blat_best THREAD_NUM=${THREAD_NUM} REF=${REFERENCE_DIR}/human_v37_contig_hg19.fasta INPUT_FILE=${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.fa OUTPUT_FILE=${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.psl BLAT_PAR="-stepSize=5 -repMatch=2253 -minScore=0 -minIdentity=0.5 -noHead" TEMP_DIR=${TEMP_DIR}
+		cat ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.psl.single | cut -f 9,10,14,16,17,18,19,21 | sed s'/,/\t/g' | awk '{printf $3"\t"$4"\t"$5"\t"$2"\t0\t"$1"\t"$4"\t"$5"\t255,0,0\t"$6"\t"; for(i=1;i<=(NF-6)/2;i++) printf $(6+i)","; printf "\t"; for(i=1;i<=(NF-6)/2;i++) printf $(6+(NF-6)/2+i)-$4","; printf "\n"}' > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.blat.bed12 
+		bamToBed -bed12 -split -i ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.bam > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.bwa.bed12
+		seqpipe -m ${TOOLS_DIR}/intersect_bed12.pipe -t ${THREAD_NUM} intersect_bed12 THREAD_NUM=${THREAD_NUM} INPUT_BLAT_FILE=${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.blat.bed12 INPUT_BWA_FILE=${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.bwa.bed12 OUTPUT_FILE=${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.pass.bed12 TEMP_DIR=${TEMP_DIR}
+		cat <(samtools view -H ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.candidate.bam) <(samtools view ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.candidate.bam | my.grep -q <(cat ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.pass.bed12 | cut -f4 | cut -f1 -d "/") -f /dev/stdin -c 1) | samtools view -Sb - > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.blat-check.bam
+		rm -f ${COMBINED_HEADER}/clustered_sites/singular_mid-support/blat-check/${PROJECT_NAME}.psl.multi
+		samtools view -h ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.blat-check.bam | trimBamByBlock.pl --trim_end=15 --trim_intron=5 --trim_indel=5 | samtools view -Sb - > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.trimmed.bam
+		samtools index ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.trimmed.bam
+		samtools mpileup -f ${REFERENCE_DIR}/human_g1k_v37.fasta -s -B -Q 0 -q 0 -d 500 ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.trimmed.bam | java -classpath ${TOOLS_DIR} PileupFilter --minbasequal=20 --minmapqual=20 --asciibase=33 | gzip > ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.filtered.pileup.gz
+		myjoin -m -F 1,2,12 -f 1,2,12 <(zcat ${COMBINED_HEADER}/clustered_sites/singular_mid-support/${PROJECT_NAME}.filtered.pileup.gz) ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.tsv | awk '$8+$9>=($29+$30)/2&&$10+$11>=($31+$32)/2' | cut -f22- > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.filtered.tsv
+			
+	intersectBed -v -a <(cat ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.filtered.tsv | awk '{OFS="\t"; print $1,$2-1,$0}' | cut -f1-2,4-) -b <(cat <(slopBed -i <(awk '$1!="MT"' ${REFERENCE_DIR}/all_repeats.b37.bed | cut -f1-3) -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 5) ${REFERENCE_DIR}/human_g1k_v37.nearhomopolymer.bed | cut -f1-3) | cut -f1,3- > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.all_filtered.tsv
+	coverageBed -a <(slopBed -i <(cat ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.all_filtered.tsv | awk '{OFS="\t";print $1,$2-1,$2}') -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 10000) -b <(cat ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.near.all_filtered.tsv | awk '{OFS="\t";print $1,$2-1,$2}') > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.win
+	mergeBed -i <(sortBed -i <(slopBed -i <(cat ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular.win | awk '$4>=3' | cut -f1-3) -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 20000)) > ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular-cluster.bed
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b ${COMBINED_HEADER}/clustered_sites/${PROJECT_NAME}.singular-cluster.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function post_genotyper_filter_control_panel
+{
+	SP_set PRE_STEP=$(( ${STEP} - 1 ))
+	
+	# remove candidates observed in many individuals
+	intersectBed -v -a <(awk '{OFS="\t"; print $1,$2-1,$0}' ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${PRE_STEP}_filtered.pileup | cut -f1-2,4-) -b ${REFERENCE_DIR}/observed_in_common.bed | cut -f1,3- | uniq > ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${STEP}_filtered.pileup
+}
+
+function annotation
+{
+	# generate the infomation table for mosaic sites
+	myjoin -m -F 1,2 -f 1,3 <(myjoin -m -F 1,2 -f 1,2 ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.output.tsv ${COMBINED_HEADER}/${PROJECT_NAME}.candidate.S${FINAL_STEP}_filtered.pileup) ${COMBINED_HEADER}/Bayesian_call/${PROJECT_NAME}.candidate.bed | cut -f1-11,13 > ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.raw
+	fastaFromBed -tab -fi ${REFERENCE_DIR}/human_g1k_v37.fasta -bed <(slopBed -i <(cat ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.raw | awk '{OFS="\t"; print $1,$2-1,$2}') -g ${REFERENCE_DIR}/human_g1k_v37.genome -b 500) -fo ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.fa
+	paste ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.raw ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.fa | cut -f1-12,14 > ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.tsv
+	rm -f ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.raw ${COMBINED_HEADER}/${PROJECT_NAME}.mosaic.final.fa
+}
+
+function MosaicHunter
+{
+	SP_set COMBINED_HEADER="MosaicHunter_${PROJECT_NAME}"
+	SP_set INDEL_CNV_BED=""
+	
+	mkdir -p ${COMBINED_HEADER}
+	
+	SP_run pre_genotyper_filter PROJECT_NAME=${PROJECT_NAME} INDEL_CNV_BED=${INDEL_CNV_BED} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR} INPUT_BAM=${INPUT_BAM}
+	SP_run genotyper PROJECT_NAME=${PROJECT_NAME} GENDER=${GENDER} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_repeat STEP=1 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_homopolymer STEP=2 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_LoFreq STEP=3 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_extreme_depth STEP=4 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_mid_support STEP=5 PROJECT_NAME=${PROJECT_NAME} THREAD_NUM=${THREAD_NUM} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR} INPUT_BAM=${INPUT_BAM}
+	SP_run post_genotyper_filter_strand_bias STEP=6 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run post_genotyper_filter_read_position STEP=7 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR} INPUT_BAM=${INPUT_BAM}
+	SP_run post_genotyper_filter_linked_SNP STEP=8 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR} INPUT_BAM=${INPUT_BAM}
+	SP_run post_genotyper_filter_clustered_singular STEP=9 PROJECT_NAME=${PROJECT_NAME} THREAD_NUM=${THREAD_NUM} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR} INPUT_BAM=${INPUT_BAM}
+	SP_run post_genotyper_filter_control_panel STEP=10 PROJECT_NAME=${PROJECT_NAME} COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+	SP_run annotation PROJECT_NAME=${PROJECT_NAME} FINAL_STEP=10 COMBINED_HEADER=${COMBINED_HEADER} REFERENCE_DIR=${REFERENCE_DIR} TOOLS_DIR=${TOOLS_DIR} TEMP_DIR=${TEMP_DIR}
+}

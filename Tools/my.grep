@@ -1,0 +1,83 @@
+#!/rd/gentoo/usr/bin/perl
+use strict;
+ 
+use Getopt::Long;
+
+my $HELP;
+my $QUERY;
+my $FILE;
+my $QUERY_KEY=0;
+my $FILE_KEY=0;
+my $tuiso=0;
+
+my $opts = GetOptions(
+			'help|h' => \$HELP,
+			'query|q=s' => \$QUERY,
+			'file|f=s' => \$FILE,
+			'key|k=s' => \$QUERY_KEY,
+			'column|c=s' => \$FILE_KEY,
+			'tuiso=i' => \$tuiso,
+
+		     );
+#print $HELP;
+if (defined $HELP || !defined $QUERY || !defined $FILE){
+	print "Function : similar with grep\n\nUsage : $0 [-k 0] [-c 0] [--tuiso 0] -q query_file -f big_file\n\t-k : key column of query file, start from 1 (default=0, using the whole line as a key)\n\t-c : key column of big file, start from 1 (default 0, using the whole line as a key)\n\t--tuiso : use iso as keys to recoganize TU,(0=off, 1=on; default off)\n\t-q : query file (necessary)\n\t-f : big file (necessary)\n";
+#	print "Usage : $0 -q query -f file -k key-column-of-query(default 0) -c key-column-of-file (default 0) --tuiso (0=off, 1=on; default off)\n";
+	exit(0);
+}
+
+
+open QR,"<$QUERY" 
+	or die "Can not open $QUERY: $!\n";
+open FH,"<$FILE" 
+	or die "Can not open $FILE: $!\n";
+
+
+my %query;
+
+while (<QR>){
+        chomp;
+	if ($QUERY_KEY == 0 ){
+	        $query{$_}=1;
+	}
+	else{
+		my @tab=split /\s+/;
+		my @keys_id=split /,/,$QUERY_KEY;
+		my @keys;
+		my $big_key;
+		for my $i (0 .. $#keys_id){
+			$keys[$i]=$tab[  $keys_id[$i] - 1  ];
+			$big_key.=$keys[$i];
+		}
+		$query{$big_key}=1;
+	}
+		
+}
+close QR;
+
+while (<FH>){
+	chomp;
+	my $id;
+	if ($FILE_KEY == 0){
+       		$id=$_;
+       	}
+       	else{
+       		my @tab=split /\s+/;
+		my @keys_id=split /,/,$FILE_KEY;
+		my @keys;
+		for my $i (0 .. $#keys_id){
+                        $keys[$i]=$tab[  $keys_id[$i] - 1  ];
+			$id.=$keys[$i];
+                }
+	}
+	if ($tuiso == 1){
+		 my $last_dot=rindex ($id,".");
+		 $id=substr($id,0,$last_dot);
+	}
+
+	if (exists $query{$id}){
+	        print $_,"\n";
+        }
+}
+close FH;
+                                

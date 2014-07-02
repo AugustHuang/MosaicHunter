@@ -1,0 +1,28 @@
+#!/bin/bash
+
+function blat_best
+{
+	SP_set BLAT_PAR=""
+	
+	SP_set RANDOM_NUM=$(echo "$RANDOM")
+	SP_set INPUT_HEADER=$(echo ${INPUT_FILE} | awk -F "/" '{print $(NF)}').${RANDOM_NUM}
+	SP_set OUTPUT_HEADER=$(echo ${OUTPUT_FILE} | awk -F "/" '{print $(NF)}').${RANDOM_NUM}
+	
+	export SPLITFRAGTEMPLATE="${TEMP_DIR}/${INPUT_HEADER}%3.3d"
+	fastasplitn ${INPUT_FILE} ${THREAD_NUM}
+	
+	SP_for_parallel _num={01..${THREAD_NUM}} 
+	{
+		blat ${BLAT_PAR} ${REF} ${TEMP_DIR}/${INPUT_HEADER}0${_num} /dev/stdout | awk -F "\t" 'NF==21' | gzip > ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}.gz
+		highest-score.pl <(zcat ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}.gz | calculate-score-coverage-identity.pl -) <(zcat ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}.gz | calculate-score-coverage-identity.pl -) ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}.single ${TEMP_DIR}/${OUTPUT_HEADER}.${_num}.multi
+	}
+	
+	{{
+		cat ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.gz > ${OUTPUT_FILE}.gz
+		cat ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.single > ${OUTPUT_FILE}.single
+		cat ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.multi > ${OUTPUT_FILE}.multi
+	}}
+	
+#	rm -f ${TEMP_DIR}/${INPUT_HEADER}0{01..${THREAD_NUM}} ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.gz
+#	rm -f ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.single ${TEMP_DIR}/${OUTPUT_HEADER}.{01..${THREAD_NUM}}.multi
+}
