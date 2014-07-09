@@ -51,9 +51,9 @@
 <p>To identify pSNM sites from the whole-genome sequencing data, you can run this command: </p>
 <p>    seqpipe -m /your/MosaicHunter/directory/MosaicHunter.pipe MosaicHunter REFERENCE_DIR=/your/MosaicHunter/directory/Reference TOOLS_DIR=/your/MosaicHunter/directory/Tools TEMP_DIR=/your/temp/directory INPUT_BAM=example.bam [INDEL_CNV_BED=example.bed] PROJECT_NAME=example GENDER=M THREAD_NUM=5</p>
 <p>        [INPUT_BAM]: the path of your input .bam file, the .bam file should be sorted and indexed</p>
-<p>        [INDEL_CNV_BED]: the path of a .bed file containing all the CNV and indel-flanking(+-5bp) regions which will be masked in our pipeline</p>
+<p>        [INDEL_CNV_BED]: the path of a .bed file containing all the CNV and indel-flanking(+/-5bp) regions which will be masked in our pipeline</p>
 <p>        [PROJECT_NAME]: a string used as the prefix and suffix of the output files's name</p>
-<p>        [GENDER]:  the gender of the subject, F or M</p>
+<p>        [GENDER]: the gender of the subject, "F" for female or "M" for male</p>
 <p>        [THREAD_NUM]: the maximum number of threads for running the script</p>
 
 <p>Recommended pre-processing of the .bam file:</p>
