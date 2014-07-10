@@ -62,12 +62,12 @@
 <p>    3) Processing the reads by GATK's indel realignment and base quality score recalibration</p>
 
 
-<p>To change the running order and the parameters of the Bayesian genotyepr and the error filters, you can edit the the scripts of MosaicHunter in /MosaicHunter/MosaicHunter.pipe, according to the user manual of seqpipe.</p>
+<p>To change the running order and the parameters of the Bayesian genotyper and the error filters, you can edit the scripts of MosaicHunter in /MosaicHunter/MosaicHunter.pipe, according to the user manual of seqpipe.</p>
 
 <p>======Output</p>
 
 <p>The final list of the pSNM candidates could be found at MosaicHunter_[PROJECT_NAME]/[PROJECT_NAME].mosaic.final.tsv</p>
-<p>    The colunms in the final list represent:</p>
+<p>    The columns in the final list represent:</p>
 <p>    1) chromosome</p>
 <p>    2) position</p>
 <p>    3) total depth</p>
@@ -80,4 +80,4 @@
 <p>    10) -log10 of posterior probability of alt-hom genotype</p>
 <p>    11) -log10 of posterior probability of mosaic genotype</p>
 <p>    12) population allele fraction in dbSNP 137, -1 for annotated sites without information of allele fraction, -2 for unannotated sites</p>
-<p>    13) sequence of +-500bp flanking regions</p>
+<p>    13) sequence of +/-500bp flanking regions</p>
