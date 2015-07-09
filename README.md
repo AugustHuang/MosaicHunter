@@ -12,7 +12,7 @@
 <p>    #BEDtools: 2.15.0</p>
 <p>    #SAMtools: 0.1.18</p>
 <p>    #FASTX-Toolkit: 0.0.13</p>
-<p>    #Blat</p>
+<p>    #Blat: 34x13</p>
 <p>    #fastasplitn</p>
 
 <p>Reference data for the script: (Please put them into /your/MosaicHunter/directory/Reference)</p>
