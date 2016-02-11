@@ -16,13 +16,13 @@
 <p>    #fastasplitn</p>
 
 <p>Reference data for the script: (Please put them into /your/MosaicHunter/directory/Reference)</p>
-<p>    #human_g1k_v37.fasta (available at <a href="http://soms.nibs.ac.cn:6237/human_g1k_v37.fasta">http://soms.nibs.ac.cn:6237/human_g1k_v37.fasta</a>)</p>
-<p>    #human_g1k_v37.genome</p>
-<p>    #human_hg19.fasta (available at <a href="http://soms.nibs.ac.cn:6239/human_hg19.fasta">http://soms.nibs.ac.cn:6239/human_hg19.fasta</a>)</p>
-<p>    #all_repeats.b37.bed</p>
-<p>    #PAR.b37.bed</p>
-<p>    #dbsnp_137.b37.SNP_AF.tsv (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp_137.b37.SNP_AF.tsv">http://soms.nibs.ac.cn:6235/dbsnp_137.b37.SNP_AF.tsv</a>)</p>
-<p>    #observed_in_common.bed</p>
+<p>    #human_g1k_v37.fasta (available at <a href="http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.fasta">http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.fasta</a>)</p>
+<p>    #human_g1k_v37.genome (available at <a href="http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.genome">http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.genome</a>)</p>
+<p>    #human_hg19.fasta (available at <a href="http://soms.nibs.ac.cn:6235/hg/human_hg19.fasta">http://soms.nibs.ac.cn:6235/hg/human_hg19.fasta</a>)</p>
+<p>    #all_repeats.b37.bed (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/all_repeats.b37.bed">http://soms.nibs.ac.cn:6235/dbsnp/all_repeats.b37.bed</a>)</p>
+<p>    #PAR.b37.bed (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/PAR.b37.bed">http://soms.nibs.ac.cn:6235/dbsnp/PAR.b37.bed</a>)</p>
+<p>    #dbsnp_137.b37.SNP_AF.tsv (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/dbsnp_137.b37.SNP_AF.tsv">http://soms.nibs.ac.cn:6235/dbsnp/dbsnp_137.b37.SNP_AF.tsv</a>)</p>
+<p>    #observed_in_common.bed (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/observed_in_common.bed">http://soms.nibs.ac.cn:6235/dbsnp/observed_in_common.bed</a>)</p>
 
 <p>Tools for the script: (Please put them into /your/MosaicHunter/directory/Tools)</p>
 <p>    #generate_beta_log10_val_file.r</p>
