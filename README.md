@@ -16,8 +16,8 @@
 <p>    #fastasplitn</p>
 
 <p>Reference data for the script: (Please put them into /your/MosaicHunter/directory/Reference)</p>
-<p>    #human_g1k_v37.fasta (available at <a href="http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.fasta">http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.fasta</a>)</p>
-<p>    #human_g1k_v37.genome (available at <a href="http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.genome">http://soms.nibs.ac.cn:6235/g1k/human_g1k_v37.genome</a>)</p>
+<p>    #human_g1k_v37.fasta (available at <a href="http://soms.nibs.ac.cn:6235/glk/human_g1k_v37.fasta">http://soms.nibs.ac.cn:6235/glk/human_g1k_v37.fasta</a>)</p>
+<p>    #human_g1k_v37.genome (available at <a href="http://soms.nibs.ac.cn:6235/glk/human_g1k_v37.genome">http://soms.nibs.ac.cn:6235/glk/human_g1k_v37.genome</a>)</p>
 <p>    #human_hg19.fasta (available at <a href="http://soms.nibs.ac.cn:6235/hg/human_hg19.fasta">http://soms.nibs.ac.cn:6235/hg/human_hg19.fasta</a>)</p>
 <p>    #all_repeats.b37.bed (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/all_repeats.b37.bed">http://soms.nibs.ac.cn:6235/dbsnp/all_repeats.b37.bed</a>)</p>
 <p>    #PAR.b37.bed (available at <a href="http://soms.nibs.ac.cn:6235/dbsnp/PAR.b37.bed">http://soms.nibs.ac.cn:6235/dbsnp/PAR.b37.bed</a>)</p>
